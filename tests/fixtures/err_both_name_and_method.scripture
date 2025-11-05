@@ -1,0 +1,12 @@
+<class name=C visibility.PUBLIC>
+  <fields></fields>
+  <methods>
+    <method name=f return=VOID purity.MUTATING safety.SAFE visibility.PUBLIC>
+      <params><param name=self type=C mutable/></params>
+      <body>
+        <!-- ERROR: name ⊕ method must hold -->
+        <call namespace=core name=log_info method=clear on=self purity.IO/>
+      </body>
+    </method>
+  </methods>
+</class>

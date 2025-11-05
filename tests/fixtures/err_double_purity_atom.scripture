@@ -1,0 +1,10 @@
+<class name=C visibility.PUBLIC>
+  <fields></fields>
+  <methods>
+    <!-- ERROR: exactly one purity.* required -->
+    <method name=f return=VOID purity.PURE purity.IO safety.SAFE visibility.PUBLIC>
+      <params><param name=self type=C/></params>
+      <body><return/></body>
+    </method>
+  </methods>
+</class>

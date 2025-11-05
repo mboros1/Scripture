@@ -1,0 +1,97 @@
+<!-- Exercises: class/fields/methods, params, let/assign/return/if/while, free calls (value/stmt), method call (value). -->
+
+<class name=Pair visibility.PUBLIC>
+  <fields>
+    <field name=m1 type=i32 mutable/>
+    <field name=m2 type=i32 mutable/>
+  </fields>
+
+  <methods>
+    <!-- PURE, SAFE, PUBLIC -->
+    <method name=sum return=i32 purity.PURE safety.SAFE visibility.PUBLIC>
+      <params>
+        <param name=self type=Pair/>
+      </params>
+      <body>
+        <!-- let from <expr> -->
+        <let name=a type=i32>
+          <expr>self.m1 + self.m2</expr>
+        </let>
+
+        <!-- let from <call> (value-position PURE) -->
+        <let name=h type=i32>
+          <call namespace=core name=hypot expect=i32 purity.PURE>
+            <arg><expr>self.m1</expr></arg>
+            <arg><expr>self.m2</expr></arg>
+          </call>
+        </let>
+
+        <!-- statement-position IO call -->
+        <call namespace=core name=log_info purity.IO>
+          <arg><expr>"computing sum"</expr></arg>
+        </call>
+
+        <!-- control flow using A-expr -->
+        <if>
+          <cond><expr>a < h</expr></cond>
+          <then>
+            <return><expr>h</expr></return>
+          </then>
+          <else>
+            <return><expr>a</expr></return>
+          </else>
+        </if>
+      </body>
+    </method>
+
+    <!-- MUTATING, SAFE, PRIVATE -->
+    <method name=zero_out return=VOID purity.MUTATING safety.SAFE visibility.PRIVATE>
+      <params>
+        <param name=self type=Pair mutable/>
+      </params>
+      <body>
+        <assign target_object=self target_field=m1>
+          <expr>0</expr>
+        </assign>
+        <assign target_object=self target_field=m2>
+          <expr>0</expr>
+        </assign>
+
+        <!-- while with pure cond -->
+        <while>
+          <cond><expr>false</expr></cond>
+          <body>
+            <call namespace=core name=log_info purity.IO>
+              <arg><expr>"unreachable"</expr></arg>
+            </call>
+          </body>
+        </while>
+      </body>
+    </method>
+  </methods>
+</class>
+
+<class name=Util visibility.PUBLIC>
+  <fields></fields>
+
+  <methods>
+    <!-- PUBLIC method, calls another method on a receiver -->
+    <method name=length_of return=i32 purity.PURE safety.SAFE visibility.PUBLIC>
+      <params>
+        <param name=self type=Util/>
+        <param name=p type=Pair/>
+      </params>
+      <body>
+        <!-- method call in value position -->
+        <let name=len type=i32>
+          <call method=sum on=p expect=i32 purity.PURE/>
+        </let>
+
+        <!-- statement-position pure (unused return -> lint later) -->
+        <call namespace=core name=time_now_us purity.PURE/>
+
+        <return><expr>len</expr></return>
+      </body>
+    </method>
+  </methods>
+</class>

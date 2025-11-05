@@ -1,0 +1,12 @@
+<class name=C visibility.PUBLIC>
+  <fields></fields>
+  <methods>
+    <method name=f return=VOID purity.MUTATING safety.SAFE visibility.PUBLIC>
+      <params><param name=self type=C mutable/></params>
+      <body>
+        <!-- ERROR: method=… requires on=IdentPath -->
+        <call method=clear purity.MUTATING/>
+      </body>
+    </method>
+  </methods>
+</class>

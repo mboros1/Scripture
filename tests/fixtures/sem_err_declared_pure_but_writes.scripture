@@ -1,0 +1,14 @@
+<class name=C visibility.PUBLIC>
+  <fields>
+    <field name=v type=i32 mutable/>
+  </fields>
+  <methods>
+    <method name=f return=i32 purity.PURE safety.SAFE visibility.PUBLIC>
+      <params><param name=self type=C mutable/></params>
+      <body>
+        <assign target_object=self target_field=v><expr>1</expr></assign>
+        <return><expr>self.v</expr></return>
+      </body>
+    </method>
+  </methods>
+</class>

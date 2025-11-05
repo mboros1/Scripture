@@ -1,0 +1,13 @@
+<class name=C visibility.PUBLIC>
+  <fields></fields>
+  <methods>
+    <method name=f return=i32 purity.PURE safety.SAFE visibility.PUBLIC>
+      <params><param name=self type=C/></params>
+      <body>
+        <let name=x type=i32>
+          <call namespace=core name=read_line expect=i32 purity.IO/>
+        </let>
+      </body>
+    </method>
+  </methods>
+</class>

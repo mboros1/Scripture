@@ -440,6 +440,7 @@ Scripture is built to lean into what they're already good at (structured repetit
 ## Status
 
 * Grammar: draft in this README.
+* Docs: [CALLS — Function & Method Calls (v0)](CALLS.md), [SYNTAX — Scripture Canonical Form (v0)](SYNTAX.md), [MODEL — Types, Symbols, and Effects (v0)](MODEL.md), [RUNTIME — Call Execution Glue (v0)](RUNTIME.md).
 * Validator: not implemented yet.
 * Compiler/backend: not implemented yet. Target is "lower Scripture to C/Rust-like output," then normal toolchains take it the rest of the way.
 * Pointer model / raw memory / unsafe tier: TODO.
@@ -481,4 +482,3 @@ At that point we have something real.
 Scripture is an IR you can read, as a contract language between you and the LLM.
 
 If you're into compilers, static analysis, systems work, vibe coding, or just want to see how far we can push LLM-led codegen without lying to ourselves; welcome in.
-
