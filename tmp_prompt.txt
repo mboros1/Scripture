@@ -1,1 +1,0 @@
-okay, for now we're doing a rust runtime, interpreted language, and pivot to JIT like Holy C. can you write up another markdown for a first issue about implementing the first `expr` language, and give some guidance on how tokenization should work and some examples and expected outputs? want a pretty easy spoon fed issue for a friend to onboard easily
