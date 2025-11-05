@@ -75,42 +75,42 @@ This is intentional.
 ## Example: a tiny data type with a mutating method
 
 ```txt
-<class name="Pair" visibility="public">
+<class name=Pair visibility.PUBLIC>
     <fields>
-        <field name="m1" type="i32" mutable="true"/>
-        <field name="m2" type="i32" mutable="true"/>
+        <field name=m1 type=i32 mutable/>
+        <field name=m2 type=i32 mutable/>
     </fields>
 
     <methods>
 
-        <method name="swap" return="void" purity="mutating" safety="safe">
+        <method name=swap return=VOID purity.MUTATING safety.SAFE>
             <params>
-                <param name="self" type="Pair" mut="true"/>
-                <param name="other" type="Pair" mut="true"/>
+                <param name=self type=Pair mutable/>
+                <param name=other type=Pair mutable/>
             </params>
 
             <body>
-                <let name="tmp" type="i32">
+                <let name=tmp type=i32>
                     <expr>self.m1</expr>
                 </let>
 
-                <assign target_object="self" target_field="m1">
+                <assign target_object=self target_field=m1>
                     <expr>other.m1</expr>
                 </assign>
 
-                <assign target_object="other" target_field="m1">
+                <assign target_object=other target_field=m1>
                     <expr>tmp</expr>
                 </assign>
 
-                <let name="tmp2" type="i32">
+                <let name=tmp2 type=i32>
                     <expr>self.m2</expr>
                 </let>
 
-                <assign target_object="self" target_field="m2">
+                <assign target_object=self target_field=m2>
                     <expr>other.m2</expr>
                 </assign>
 
-                <assign target_object="other" target_field="m2">
+                <assign target_object=other target_field=m2>
                     <expr>tmp2</expr>
                 </assign>
             </body>
@@ -124,8 +124,8 @@ Read it literally:
 
 * `Pair` has two fields, both mutable 32-bit ints.
 * `swap` is a method that takes two `Pair`s by mutable access and swaps their contents.
-* `purity="mutating"` says: this method is allowed to modify state.
-* `safety="safe"` says: this is not doing any explicitly dangerous / low-level operations. (We'll get to `unsafe` later when we add raw pointer ops.)
+* `purity.MUTATING` says: this method is allowed to modify state.
+* `safety.SAFE` says: this is not doing any explicitly dangerous / low-level operations. (We'll get to `safety.UNSAFE` later when we add raw pointer ops.)
 
 Inside `<body>`: every effect is spelled out.
 
@@ -165,30 +165,91 @@ Coding is a dialogue between the man and the machine, and the code is structured
 
 ---
 
+## Attribute conventions
+
+Short answer: **No — don’t use string literals for fixed-vocabulary parameters.** Use atoms/enums (unquoted) or presence flags. Reserve quoted strings for truly free text.
+
+Why we avoid quoted enums:
+
+* Fewer failure modes — no smart quotes, dropped quotes, or mismatched casing.
+* Sharper tokens — `purity.MUTATING` is easier to visually scan than `"mutating"`.
+* Validator clarity — membership checks are trivial when the vocabulary is unquoted atoms.
+* Style drift control — atoms make it harder to invent `"mutatiing"` or `"pure-ish"`.
+
+### Recommended conventions
+
+* **Enums as atoms (unquoted):**
+  * `purity=PURE | MUTATING | IO`
+  * `safety=SAFE | UNSAFE`
+  * `visibility=PUBLIC | PRIVATE`
+* **Booleans as presence flags (default = false):**
+  * `mutable` (present → true, absent → false)
+  * If you have to spell false explicitly, tolerate `mutable=false` but don’t encourage it.
+* **Types and identifiers as atoms:** `type=i32`, `type=Pair`, `name=swap`.
+* **Free text gets quotes:** `doc="Compute checksum of payload"`.
+
+### Preferred: namespaced presence flags
+
+To avoid `=` entirely for enums, we treat each option as a namespaced flag. Exactly one flag from each enum group must appear; the validator rejects zero or multiple selections.
+
+```txt
+<method name=swap return=VOID purity.MUTATING safety.SAFE>
+    <params>
+        <param name=self type=Pair mutable/>
+        <param name=other type=Pair mutable/>
+    </params>
+    <body> ... </body>
+</method>
+```
+
+### Canonicalization during the transition
+
+* The parser can accept legacy string forms for a short window (e.g. `purity="mutating"`, `mut="true"`).
+* The formatter normalizes everything back to atoms/flags and emits a warning so authors migrate.
+* After the first milestone, reject string-valued enums outright.
+
+### Tiny before/after
+
+Avoid:
+
+```txt
+<field name="m1" type="i32" mutable="true"/>
+<method name="swap" return="void" purity="mutating" safety="safe">
+```
+
+Prefer:
+
+```txt
+<field name=m1 type=i32 mutable/>
+<method name=swap return=VOID purity.MUTATING safety.SAFE>
+```
+
+---
+
 ## Purity / safety model
 
 Scripture does not pretend everything is magically safe. We don't lie to ourselves that the compiler will infer intent.
 
 We make you say it out loud:
 
-* `purity="pure"`:
+* `purity.PURE`:
   This method promises not to mutate anything and not to perform IO. Think "mathematical function."
 
-* `purity="mutating"`:
+* `purity.MUTATING`:
   This method can update state (write to fields, reassign values).
 
-* (later) `purity="io"`:
+* (later) `purity.IO`:
   This method is allowed to talk to the outside world, log, allocate, free, etc.
 
-* `safety="safe"` vs `safety="unsafe"`:
-  `safety="safe"` means "no raw pointer tricks, no manual memory shenanigans, no UB-tier behavior."
-  `safety="unsafe"` is where we let you pull out the knives (pointer arithmetic, manual free, etc.) — TODO, not implemented in the first draft grammar but explicitly planned.
+* `safety.SAFE` vs `safety.UNSAFE`:
+  `safety.SAFE` means "no raw pointer tricks, no manual memory shenanigans, no UB-tier behavior."
+  `safety.UNSAFE` is where we let you pull out the knives (pointer arithmetic, manual free, etc.) — TODO, not implemented in the first draft grammar but explicitly planned.
 
 Why do this? Because now you can ask the LLM:
 
 > "Give me a safe pure function that computes a checksum, no IO, no mutation."
 
-and it has a slot to put that promise: `purity="pure" safety="safe"`.
+and it has a slot to put that promise: `purity.PURE safety.SAFE`.
 
 Then, critically, the validator can reject anything that violates it before it lands in git.
 
@@ -203,7 +264,7 @@ Inside a `<body>`, you don't freehand code. You emit structured statements. Earl
 Create a new local binding.
 
 ```txt
-<let name="tmp" type="i32">
+<let name=tmp type=i32>
     <expr>self.m1</expr>
 </let>
 ```
@@ -221,7 +282,7 @@ That is: `let tmp: i32 = self.m1;`
 Write to an object's field.
 
 ```txt
-<assign target_object="self" target_field="m1">
+<assign target_object=self target_field=m1>
     <expr>other.m1</expr>
 </assign>
 ```
@@ -307,7 +368,7 @@ Allowed inside `<expr>`:
 Example:
 
 ```txt
-<let name="sum" type="i32">
+<let name=sum type=i32>
     <expr>self.m1 + other.m1</expr>
 </let>
 ```
@@ -320,7 +381,7 @@ Example:
     </then>
     <else>
         <body>
-            <assign target_object="self" target_field="m1">
+            <assign target_object=self target_field=m1>
                 <expr>other.m1</expr>
             </assign>
         </body>
@@ -347,7 +408,7 @@ This is one of the big differences vs "prompt engineering a normal language." Sc
 We are going to support calls like this:
 
 ```txt
-<call name="magnitude" expect="i32" purity="pure">
+<call name=magnitude expect=i32 purity.PURE>
     <arg><expr>self.m1</expr></arg>
     <arg><expr>self.m2</expr></arg>
 </call>
@@ -358,7 +419,7 @@ This returns a value, and can appear inside `<let>` in place of `<expr>`.
 Why not let the model inline `magnitude(self.m1, self.m2)` directly into `<expr>`?
 Because we don't want `<expr>` to become a trojan horse for side effects.
 
-Even if `magnitude` is logically pure, we still force the call to be spelled out in a `<call>` node with `purity="pure"` declared. That gives us two things:
+Even if `magnitude` is logically pure, we still force the call to be spelled out in a `<call>` node with `purity.PURE` declared. That gives us two things:
 
 * We can reject any call marked pure if its callee isn't actually pure.
 * We can track purity boundaries statically.
@@ -366,7 +427,7 @@ Even if `magnitude` is logically pure, we still force the call to be spelled out
 Later we'll also allow impure calls:
 
 ```txt
-<call name="log_info" purity="io">
+<call name=log_info purity.IO>
     <arg><expr>"swapping pairs"</expr></arg>
 </call>
 ```
@@ -385,8 +446,8 @@ Each method advertises a `safety` level:
 </method>
 ```
 
-* `safety="safe"` means you're not doing raw pointer tricks, direct memory arithmetic, manual free, etc.
-* In the future we'll support `safety="unsafe"` to explicitly allow knife-fight behavior: manual allocation, pointer arithmetic, alias-heavy mutation of shared memory, etc.
+* `safety.SAFE` means you're not doing raw pointer tricks, direct memory arithmetic, manual free, etc.
+* In the future we'll support `safety.UNSAFE` to explicitly allow knife-fight behavior: manual allocation, pointer arithmetic, alias-heavy mutation of shared memory, etc.
 
 That tiering is important. We *do* want C-class power. We just want it quarantined and labeled so we can:
 
@@ -401,7 +462,7 @@ TODO: not in this draft.
 But directionally:
 
 * We will introduce `ptr<T>` as a first-class type.
-* We'll introduce `<address_of>`, `<assign target_object_ptr="...">`, and explicit pointer arithmetic nodes (e.g. `<ptr_add>`) that only compile in `safety="unsafe"`.
+* We'll introduce `<address_of>`, `<assign target_object_ptr="...">`, and explicit pointer arithmetic nodes (e.g. `<ptr_add>`) that only compile in `safety.UNSAFE`.
 * We'll also expose aliasing guarantees as attributes on params (e.g. `aliasing="no_alias"` vs `aliasing="may_alias"`), which lets us express both "Rust-like borrow" and "C-like shared pointer to same buffer" honestly and explicitly.
 
 Again, none of that is in the MVP grammar, but we're designing toward it.
@@ -463,8 +524,8 @@ Scripture is built to lean into what they're already good at (structured repetit
 
    * verifies tag structure and allowed attributes
    * parses `<expr>` and rejects anything with side effects
-   * checks purity vs body contents (`purity="pure"` means: no `<assign>`, no IO calls, etc.)
-   * checks safety vs body contents (`safety="safe"` means: no pointer ops once we add them)
+   * checks purity vs body contents (`purity.PURE` means: no `<assign>`, no IO calls, etc.)
+   * checks safety vs body contents (`safety.SAFE` means: no pointer ops once we add them)
 3. Write a dumb codegen pass from Scripture -> Rust/C-ish output (doesn't have to be optimal; just has to run)
 4. Wire the LLM loop:
 
