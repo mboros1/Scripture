@@ -1,5 +1,5 @@
 // expr/src/parser.rs
-use crate::token::{Token, TokenKind};
+use crate::token::{Span, Token, TokenKind};
 use crate::ast::{Expr, BOp, UOp, IdentPath};
 use crate::error::ParseError;
 
@@ -31,43 +31,48 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_precedence(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
-        use TokenKind::*;
-
         // ---- prefix / primary ----
-        let mut lhs = match self.next_token().ok_or(ParseError::UnexpectedEOF)? {
-            Token { kind: TokenKind::Int(n), .. } => Expr::Int(*n),
+        let token = self
+            .next_token()
+            .ok_or(ParseError::UnexpectedEof { span: self.eof_span() })?;
 
-            Token { kind: TokenKind::Bool(b), .. } => Expr::Bool(*b),
+        let mut lhs = match &token.kind {
+            TokenKind::Int(n) => Expr::Int(*n),
 
-            Token { kind: TokenKind::Str(s), .. } => Expr::Str(s.clone()),
+            TokenKind::Bool(b) => Expr::Bool(*b),
 
-            Token { kind: TokenKind::Ident(name), .. } => {
-                Expr::Ident(IdentPath(vec![name.clone()]))
-            }
+            TokenKind::Str(s) => Expr::Str(s.clone()),
 
-            Token { kind: TokenKind::Bang, .. } => {
+            TokenKind::Ident(name) => Expr::Ident(IdentPath(vec![name.clone()])),
+
+            TokenKind::Bang => {
                 // unary not has high precedence
                 let rhs = self.parse_precedence(15)?;
                 Expr::Unary { op: UOp::Not, expr: Box::new(rhs) }
             }
 
-            Token { kind: TokenKind::Minus, .. } => {
+            TokenKind::Minus => {
                 let rhs = self.parse_precedence(15)?;
                 Expr::Unary { op: UOp::Neg, expr: Box::new(rhs) }
             }
 
-            Token { kind: TokenKind::LParen, .. } => {
+            TokenKind::LParen => {
                 let expr = self.parse_expr()?;
                 // expect RParen
                 match self.next_token() {
                     Some(Token { kind: TokenKind::RParen, .. }) => (),
-                    _ => return Err(ParseError::UnexpectedToken("expected ')'".into())),
+                    _ => {
+                        return Err(ParseError::ExpectedToken {
+                            expected: ")",
+                            span: self.peek_span(),
+                        })
+                    }
                 }
                 expr
             }
 
-            other => {
-                return Err(ParseError::UnexpectedToken(format!("unexpected token: {:?}", other)));
+            _ => {
+                return Err(ParseError::UnexpectedToken { span: token.span });
             }
         };
 
@@ -104,6 +109,16 @@ impl<'a> Parser<'a> {
         }
 
         Ok(lhs)
+    }
+}
+
+impl<'a> Parser<'a> {
+    fn eof_span(&self) -> Span {
+        self.tokens.last().map(|t| t.span).unwrap_or_default()
+    }
+
+    fn peek_span(&self) -> Span {
+        self.peek_token().map(|t| t.span).unwrap_or_else(|| self.eof_span())
     }
 }
 

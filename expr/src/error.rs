@@ -1,22 +1,29 @@
-// expr/src/error.rs
-#[derive(Debug, Clone)]
+use crate::token::Span;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum LexError {
-    UnterminatedString { start: usize, end: usize },
-    UnknownChar { ch: char, start: usize, end: usize },
+    UnterminatedString { span: Span },
+    UnknownChar { ch: char, span: Span },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
-    UnexpectedToken(String),
-    UnexpectedEOF,
-    Other(String),
+    ExpectedOperand { span: Span },
+    ExpectedToken { expected: &'static str, span: Span },
+    UnexpectedToken { span: Span },
+    UnexpectedEof { span: Span },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
-    TypeMismatch(String),
-    UnknownIdent(String),
-    UnknownField { base: String, field: String },
-    DivideByZero,
-    Other(String),
+    TypeMismatch {
+        op: &'static str,
+        left: &'static str,
+        right: &'static str,
+        span: Span,
+    },
+    UnknownIdent { name: String, span: Span },
+    UnknownField { base: String, field: String, span: Span },
+    DivideByZero { span: Span },
+    Other { message: String, span: Span },
 }
