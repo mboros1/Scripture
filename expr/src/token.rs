@@ -8,13 +8,42 @@ use crate::error::LexError;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // punctuation
-    LParen, RParen, Dot,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Dot,
+    Comma,
+    ColonColon,
 
     // operators
-    Plus, Minus, Star, Slash, Percent,
-    Lt, Le, Gt, Ge, EqEq, BangEq,
-    AndAnd, OrOr,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    EqEq,
+    BangEq,
+    AndAnd,
+    OrOr,
     Bang,
+
+    // keywords / special
+    In,
+    Union,
+    Intersect,
+    Diff,
+    Card,
+    Pipe,
+    Arrow,
+    PlusInf,
+    MinusInf,
 
     // literals
     Int(i64),
@@ -52,13 +81,40 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             '0'..='9' => read_number(&mut chars, &mut index),
             _ if is_ident_start(c) => read_ident(&mut chars, &mut index),
             '"' => read_string(&mut chars, &mut index)?,
-            '+' => { chars.next(); index += 1; TokenKind::Plus },
-            '-' => { chars.next(); index += 1; TokenKind::Minus },
+            '+' => {
+                chars.next();
+                index += 1;
+                if keyword_follows(&chars, "inf") {
+                    consume_keyword(&mut chars, &mut index, "inf");
+                    TokenKind::PlusInf
+                } else {
+                    TokenKind::Plus
+                }
+            }
+            '-' => {
+                chars.next();
+                index += 1;
+                if keyword_follows(&chars, "inf") {
+                    consume_keyword(&mut chars, &mut index, "inf");
+                    TokenKind::MinusInf
+                } else if matches!(chars.peek(), Some(&'>')) {
+                    chars.next();
+                    index += 1;
+                    TokenKind::Arrow
+                } else {
+                    TokenKind::Minus
+                }
+            }
             '*' => { chars.next(); index += 1; TokenKind::Star },
             '/' => { chars.next(); index += 1; TokenKind::Slash },
             '%' => { chars.next(); index += 1; TokenKind::Percent },
             '(' => { chars.next(); index += 1; TokenKind::LParen },
             ')' => { chars.next(); index += 1; TokenKind::RParen },
+            '{' => { chars.next(); index += 1; TokenKind::LBrace },
+            '}' => { chars.next(); index += 1; TokenKind::RBrace },
+            '[' => { chars.next(); index += 1; TokenKind::LBracket },
+            ']' => { chars.next(); index += 1; TokenKind::RBracket },
+            ',' => { chars.next(); index += 1; TokenKind::Comma },
             '.' => { chars.next(); index += 1; TokenKind::Dot },
             '!' => {
                 chars.next();
@@ -124,13 +180,35 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             '|' => {
                 chars.next();
                 index += 1;
-                if let Some('|') = chars.peek() {
+                match chars.peek() {
+                    Some('|') => {
+                        chars.next();
+                        index += 1;
+                        TokenKind::OrOr
+                    }
+                    Some('>') => {
+                        chars.next();
+                        index += 1;
+                        TokenKind::Pipe
+                    }
+                    _ => {
+                        return Err(LexError::UnknownChar {
+                            ch: '|',
+                            span: Span { start, end: index },
+                        });
+                    }
+                }
+            }
+            ':' => {
+                chars.next();
+                index += 1;
+                if let Some(':') = chars.peek() {
                     chars.next();
                     index += 1;
-                    TokenKind::OrOr
+                    TokenKind::ColonColon
                 } else {
                     return Err(LexError::UnknownChar {
-                        ch: '|',
+                        ch: ':',
                         span: Span { start, end: index },
                     });
                 }
@@ -185,6 +263,11 @@ fn read_ident(chars: &mut Peekable<Chars>, index: &mut usize) -> TokenKind {
     match name.as_str() {
         "true" => TokenKind::Bool(true),
         "false" => TokenKind::Bool(false),
+        "in" => TokenKind::In,
+        "union" => TokenKind::Union,
+        "intersect" => TokenKind::Intersect,
+        "diff" => TokenKind::Diff,
+        "card" => TokenKind::Card,
         _ => TokenKind::Ident(name),
     }
 }
@@ -222,4 +305,27 @@ fn is_ident_start(c: char) -> bool {
 
 fn is_ident_continue(c: char) -> bool {
     c == '_' || c.is_ascii_alphanumeric()
+}
+
+fn keyword_follows(iter: &Peekable<Chars>, keyword: &str) -> bool {
+    let mut lookahead = iter.clone();
+    for expected in keyword.chars() {
+        match lookahead.peek() {
+            Some(&c) if c.eq_ignore_ascii_case(&expected) => {
+                lookahead.next();
+            }
+            _ => return false,
+        }
+    }
+    match lookahead.peek() {
+        Some(&c) if is_ident_continue(c) => false,
+        _ => true,
+    }
+}
+
+fn consume_keyword(chars: &mut Peekable<Chars>, index: &mut usize, keyword: &str) {
+    for _ in keyword.chars() {
+        chars.next();
+        *index += 1;
+    }
 }
