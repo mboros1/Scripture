@@ -1,134 +1,24 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::ast::{Expr, BOp, UOp, IdentPath, SetOp, IntervalExpr, BoundExpr, Call};
+use crate::ast::{Expr, BOp, UOp, IdentPath, SetOp, IntervalExpr, BoundExpr};
+use crate::builtins;
 use crate::error::{EvalError, TypeTag};
+use crate::runtime::Env;
 use crate::token::Span;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Int(i64),
-    Bool(bool),
-    Str(String),
-    Enum { type_id: String, variant: String },
-    Set(SetValue),
-    Interval(Box<IntervalValue>),
-    Object(String),
-    Unknown,
-    Lambda(LambdaValue),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SetValue {
-    pub elem_type: TypeTag,
-    pub elements: Vec<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct IntervalValue {
-    pub elem_type: TypeTag,
-    pub lo: BoundValue,
-    pub hi: BoundValue,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BoundValue {
-    Open(Box<Value>),
-    Closed(Box<Value>),
-    NegInf,
-    PosInf,
-}
-
-impl Value {
-    pub fn type_tag(&self) -> TypeTag {
-        match self {
-            Value::Int(_) => TypeTag::Int,
-            Value::Bool(_) => TypeTag::Bool,
-            Value::Str(_) => TypeTag::Str,
-            Value::Enum { type_id, .. } => TypeTag::Enum(type_id.clone()),
-            Value::Set(set) => TypeTag::set(set.elem_type.clone()),
-            Value::Interval(interval) => TypeTag::interval(interval.elem_type.clone()),
-            Value::Object(_) => TypeTag::Unknown,
-            Value::Unknown => TypeTag::Unknown,
-            Value::Lambda(_) => TypeTag::Lambda,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct EnumInfo {
-    pub type_id: String,
-    pub variants: Vec<String>,
-    pub aliases: Vec<(String, String)>,
-}
-
-#[derive(Clone, Debug)]
-pub enum OrderKind {
-    StrictWeak,
-    Total,
-}
-
-#[derive(Clone, Debug)]
-pub struct OrderInfo {
-    pub order_id: String,
-    pub type_id: String,
-    pub kind: OrderKind,
-    pub cmp: fn(&Value, &Value) -> Ordering,
-}
-
-#[derive(Clone, Debug)]
-pub struct SemiringOps {
-    pub name: String,
-    pub zero: Value,
-    pub one: Value,
-    pub oplus: fn(&Value, &Value) -> Result<Value, EvalError>,
-    pub otimes: fn(&Value, &Value) -> Result<Value, EvalError>,
-    pub idempotent_oplus: bool,
-    pub commutative_otimes: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct LatticeOps {
-    pub type_id: String,
-    pub has_top: bool,
-    pub has_bottom: bool,
-    pub top: Option<Value>,
-    pub bottom: Option<Value>,
-    pub meet: fn(&Value, &Value) -> Result<Value, EvalError>,
-    pub join: fn(&Value, &Value) -> Result<Value, EvalError>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LambdaValue {
-    pub params: Vec<String>,
-    pub body: Box<Expr>,
-    pub captures: HashMap<String, Value>,
-}
-
-pub trait Env {
-    fn get_ident(&self, name: &str) -> Option<Value>;
-    fn get_field(&self, base: &Value, field: &str) -> Option<Value>;
-
-    fn enum_info(&self, type_id: &str) -> Option<EnumInfo>;
-    fn default_order(&self, type_id: &str) -> Option<OrderInfo>;
-    fn named_order(&self, order_id: &str) -> Option<OrderInfo>;
-
-    fn semiring(&self, _name: &str) -> Option<SemiringOps> {
-        None
-    }
-
-    fn lattice_ops(&self, _type_id: &str) -> Option<LatticeOps> {
-        None
-    }
-
-    fn capture_snapshot(&self) -> Vec<(String, Value)> {
-        Vec::new()
-    }
-
-    fn current_semiring(&self) -> Option<SemiringOps> {
-        None
-    }
-}
+use crate::value::{
+    contains_value,
+    value_eq,
+    BoundValue,
+    EnumInfo,
+    IntervalValue,
+    LatticeOps,
+    LambdaValue,
+    OrderInfo,
+    SemiringOps,
+    SetValue,
+    Value,
+};
 
 pub fn eval(expr: &Expr, env: &dyn Env) -> Result<Value, EvalError> {
     eval_expr(expr, env)
@@ -193,10 +83,15 @@ fn eval_expr(expr: &Expr, env: &dyn Env) -> Result<Value, EvalError> {
             span: Span::default(),
         }),
         Expr::Lambda { params, body } => build_lambda(params, body, env),
-        Expr::Call(call) => eval_call(&call, env),
+        Expr::Call(call) => {
+            let args = eval_args(&call.args, env)?;
+            builtins::apply(&call.func, args, env, &mut |lambda, values, env| call_lambda(lambda, values, env))
+        }
         Expr::Pipe { lhs, call } => {
             let lefthand = eval_expr(lhs, env)?;
-            eval_pipe(&call, lefthand, env)
+            let mut args = vec![lefthand];
+            args.extend(eval_args(&call.args, env)?);
+            builtins::apply(&call.func, args, env, &mut |lambda, values, env| call_lambda(lambda, values, env))
         }
         Expr::WithSemiring { name, body } => {
             let ops = env
@@ -284,6 +179,10 @@ fn eval_membership(value: Value, set_value: Value, env: &dyn Env) -> Result<Valu
     }
 }
 
+fn eval_args(args: &[Expr], env: &dyn Env) -> Result<Vec<Value>, EvalError> {
+    args.iter().map(|expr| eval_expr(expr, env)).collect()
+}
+
 fn eval_set_op(op: SetOp, lhs: Value, rhs: Value) -> Result<Value, EvalError> {
     match (lhs, rhs) {
         (Value::Set(left), Value::Set(right)) => {
@@ -333,15 +232,6 @@ fn eval_set_op(op: SetOp, lhs: Value, rhs: Value) -> Result<Value, EvalError> {
             span: Span::default(),
         }),
     }
-}
-
-fn contains_value(haystack: &[Value], needle: &Value) -> Result<bool, EvalError> {
-    for value in haystack {
-        if value_eq(value, needle)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn eval_interval_literal(interval: &IntervalExpr, env: &dyn Env) -> Result<Value, EvalError> {
@@ -594,336 +484,6 @@ fn compare_ints(lhs: Value, rhs: Value, predicate: impl Fn(Ordering) -> bool) ->
     }
 }
 
-fn value_eq(lhs: &Value, rhs: &Value) -> Result<bool, EvalError> {
-    match (lhs, rhs) {
-        (Value::Int(a), Value::Int(b)) => Ok(a == b),
-        (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
-        (Value::Str(a), Value::Str(b)) => Ok(a == b),
-        (
-            Value::Enum { type_id: ty_a, variant: var_a },
-            Value::Enum { type_id: ty_b, variant: var_b },
-        ) => {
-            if ty_a != ty_b {
-                Err(EvalError::EqMismatch {
-                    left_ty: TypeTag::Enum(ty_a.clone()),
-                    right_ty: TypeTag::Enum(ty_b.clone()),
-                    span: Span::default(),
-                })
-            } else {
-                Ok(var_a == var_b)
-            }
-        }
-        (Value::Set(a), Value::Set(b)) => {
-            if a.elements.len() != b.elements.len() {
-                return Ok(false);
-            }
-            for elem in &a.elements {
-                if !contains_value(&b.elements, elem)? {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        }
-        (Value::Interval(_), Value::Interval(_)) => Err(EvalError::EqMismatch {
-            left_ty: lhs.type_tag(),
-            right_ty: rhs.type_tag(),
-            span: Span::default(),
-        }),
-        (Value::Lambda(_), Value::Lambda(_)) => Err(EvalError::EqMismatch {
-            left_ty: lhs.type_tag(),
-            right_ty: rhs.type_tag(),
-            span: Span::default(),
-        }),
-        (a, b) => Err(EvalError::EqMismatch {
-            left_ty: a.type_tag(),
-            right_ty: b.type_tag(),
-            span: Span::default(),
-        }),
-    }
-}
-
-fn builtin_map(args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    if args.len() != 2 {
-        return Err(EvalError::LambdaArity { expected: 2, found: args.len(), span: Span::default() });
-    }
-    let set = match &args[0] {
-        Value::Set(set) => set.clone(),
-        other => {
-            return Err(EvalError::InOnNonSet {
-                rhs_ty: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-    let lambda = match &args[1] {
-        Value::Lambda(func) => func.clone(),
-        other => {
-            return Err(EvalError::LambdaType {
-                param: "map".into(),
-                expected: TypeTag::Lambda,
-                found: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-
-    let mut results = Vec::new();
-    let mut elem_type = TypeTag::Unknown;
-    for elem in &set.elements {
-        let value = call_lambda(&lambda, &[elem.clone()], env)?;
-        if elem_type == TypeTag::Unknown {
-            elem_type = value.type_tag();
-        }
-        if !contains_value(&results, &value)? {
-            results.push(value);
-        }
-    }
-    Ok(Value::Set(SetValue { elem_type, elements: results }))
-}
-
-fn builtin_filter(args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    if args.len() != 2 {
-        return Err(EvalError::LambdaArity { expected: 2, found: args.len(), span: Span::default() });
-    }
-    let set = match &args[0] {
-        Value::Set(set) => set.clone(),
-        other => {
-            return Err(EvalError::InOnNonSet {
-                rhs_ty: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-    let lambda = match &args[1] {
-        Value::Lambda(func) => func.clone(),
-        other => {
-            return Err(EvalError::LambdaType {
-                param: "filter".into(),
-                expected: TypeTag::Lambda,
-                found: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-
-    let mut results = Vec::new();
-    for elem in &set.elements {
-        let value = call_lambda(&lambda, &[elem.clone()], env)?;
-        match value {
-            Value::Bool(true) => results.push(elem.clone()),
-            Value::Bool(false) => {}
-            other => {
-                return Err(EvalError::TypeMismatch {
-                    op: "filter",
-                    left: other.type_tag(),
-                    right: TypeTag::Bool,
-                    span: Span::default(),
-                })
-            }
-        }
-    }
-    Ok(Value::Set(SetValue { elem_type: set.elem_type, elements: results }))
-}
-
-fn builtin_fold(args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    if args.len() != 3 {
-        return Err(EvalError::LambdaArity { expected: 3, found: args.len(), span: Span::default() });
-    }
-    let set = match &args[0] {
-        Value::Set(set) => set.clone(),
-        other => {
-            return Err(EvalError::InOnNonSet {
-                rhs_ty: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-    let mut acc = args[1].clone();
-    let lambda = match &args[2] {
-        Value::Lambda(func) => func.clone(),
-        other => {
-            return Err(EvalError::LambdaType {
-                param: "fold".into(),
-                expected: TypeTag::Lambda,
-                found: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-
-    for elem in &set.elements {
-        acc = call_lambda(&lambda, &[acc, elem.clone()], env)?;
-    }
-    Ok(acc)
-}
-
-fn builtin_reduce_meet(args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::LambdaArity { expected: 1, found: args.len(), span: Span::default() });
-    }
-    let set = match &args[0] {
-        Value::Set(set) => set.clone(),
-        other => {
-            return Err(EvalError::InOnNonSet {
-                rhs_ty: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-    let lattice = env
-        .lattice_ops(&match &set.elem_type {
-            TypeTag::Enum(name) => name.clone(),
-            TypeTag::Int => "core.Int".into(),
-            other => format!("{:?}", other),
-        })
-        .ok_or(EvalError::LatticeRequired { ty: set.elem_type.clone(), span: Span::default() })?;
-
-    let mut iter = set.elements.iter();
-    let mut acc = iter
-        .next()
-        .cloned()
-        .ok_or(EvalError::Other { message: "reduce_meet on empty set".into(), span: Span::default() })?;
-    for elem in iter {
-        acc = (lattice.meet)(&acc, elem)?;
-    }
-    Ok(acc)
-}
-
-fn builtin_reduce_join(args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::LambdaArity { expected: 1, found: args.len(), span: Span::default() });
-    }
-    let set = match &args[0] {
-        Value::Set(set) => set.clone(),
-        other => {
-            return Err(EvalError::InOnNonSet {
-                rhs_ty: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-    let lattice = env
-        .lattice_ops(&match &set.elem_type {
-            TypeTag::Enum(name) => name.clone(),
-            TypeTag::Int => "core.Int".into(),
-            other => format!("{:?}", other),
-        })
-        .ok_or(EvalError::LatticeRequired { ty: set.elem_type.clone(), span: Span::default() })?;
-
-    let mut iter = set.elements.iter();
-    let mut acc = iter
-        .next()
-        .cloned()
-        .ok_or(EvalError::Other { message: "reduce_join on empty set".into(), span: Span::default() })?;
-    for elem in iter {
-        acc = (lattice.join)(&acc, elem)?;
-    }
-    Ok(acc)
-}
-
-fn builtin_reduce_semiring(args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    if args.len() != 2 {
-        return Err(EvalError::LambdaArity { expected: 2, found: args.len(), span: Span::default() });
-    }
-    let set = match &args[0] {
-        Value::Set(set) => set.clone(),
-        other => {
-            return Err(EvalError::InOnNonSet {
-                rhs_ty: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-    let lambda = match &args[1] {
-        Value::Lambda(func) => func.clone(),
-        other => {
-            return Err(EvalError::LambdaType {
-                param: "reduce_semiring".into(),
-                expected: TypeTag::Lambda,
-                found: other.type_tag(),
-                span: Span::default(),
-            })
-        }
-    };
-
-    let semiring = env.current_semiring().ok_or(EvalError::SemiringMissing { span: Span::default() })?;
-    let mut acc = semiring.zero.clone();
-    for elem in &set.elements {
-        let mapped = call_lambda(&lambda, &[elem.clone()], env)?;
-        acc = (semiring.oplus)(&acc, &mapped)?;
-    }
-    Ok(acc)
-}
-
-fn call_lambda(lambda: &LambdaValue, args: &[Value], env: &dyn Env) -> Result<Value, EvalError> {
-    if lambda.params.len() != args.len() {
-        return Err(EvalError::LambdaArity {
-            expected: lambda.params.len(),
-            found: args.len(),
-            span: Span::default(),
-        });
-    }
-    let mut scope_args = HashMap::new();
-    for (name, value) in lambda.params.iter().zip(args.iter()) {
-        scope_args.insert(name.clone(), value.clone());
-    }
-
-    let lambda_env = LambdaEnv {
-        params: scope_args,
-        captures: lambda.captures.clone(),
-        parent: env,
-    };
-
-    eval_expr(&lambda.body, &lambda_env)
-}
-
-struct LambdaEnv<'a> {
-    params: HashMap<String, Value>,
-    captures: HashMap<String, Value>,
-    parent: &'a dyn Env,
-}
-
-impl<'a> Env for LambdaEnv<'a> {
-    fn get_ident(&self, name: &str) -> Option<Value> {
-        self.params
-            .get(name)
-            .cloned()
-            .or_else(|| self.captures.get(name).cloned())
-            .or_else(|| self.parent.get_ident(name))
-    }
-
-    fn get_field(&self, base: &Value, field: &str) -> Option<Value> {
-        self.parent.get_field(base, field)
-    }
-
-    fn enum_info(&self, type_id: &str) -> Option<EnumInfo> {
-        self.parent.enum_info(type_id)
-    }
-
-    fn default_order(&self, type_id: &str) -> Option<OrderInfo> {
-        self.parent.default_order(type_id)
-    }
-
-    fn named_order(&self, order_id: &str) -> Option<OrderInfo> {
-        self.parent.named_order(order_id)
-    }
-
-    fn semiring(&self, name: &str) -> Option<SemiringOps> {
-        self.parent.semiring(name)
-    }
-
-    fn lattice_ops(&self, type_id: &str) -> Option<LatticeOps> {
-        self.parent.lattice_ops(type_id)
-    }
-
-    fn capture_snapshot(&self) -> Vec<(String, Value)> {
-        self.parent.capture_snapshot()
-    }
-
-    fn current_semiring(&self) -> Option<SemiringOps> {
-        self.parent.current_semiring()
-    }
-}
 
 struct SemiringScopeEnv<'a> {
     parent: &'a dyn Env,
@@ -980,31 +540,70 @@ fn build_lambda(params: &[String], body: &Expr, env: &dyn Env) -> Result<Value, 
     }))
 }
 
-fn eval_call(call: &Call, env: &dyn Env) -> Result<Value, EvalError> {
-    let mut arg_values = Vec::with_capacity(call.args.len());
-    for arg in &call.args {
-        arg_values.push(eval_expr(arg, env)?);
+fn call_lambda(lambda: &LambdaValue, args: &[Value], env: &dyn Env) -> Result<Value, EvalError> {
+    if lambda.params.len() != args.len() {
+        return Err(EvalError::LambdaArity {
+            expected: lambda.params.len(),
+            found: args.len(),
+            span: Span::default(),
+        });
     }
-    apply_builtin(&call.func, arg_values, env)
+    let mut scope_args = HashMap::new();
+    for (name, value) in lambda.params.iter().zip(args.iter()) {
+        scope_args.insert(name.clone(), value.clone());
+    }
+    let lambda_env = LambdaEnv {
+        params: scope_args,
+        captures: lambda.captures.clone(),
+        parent: env,
+    };
+    eval_expr(&lambda.body, &lambda_env)
 }
 
-fn eval_pipe(call: &Call, lhs: Value, env: &dyn Env) -> Result<Value, EvalError> {
-    let mut arg_values = Vec::with_capacity(call.args.len() + 1);
-    arg_values.push(lhs);
-    for arg in &call.args {
-        arg_values.push(eval_expr(arg, env)?);
-    }
-    apply_builtin(&call.func, arg_values, env)
+struct LambdaEnv<'a> {
+    params: HashMap<String, Value>,
+    captures: HashMap<String, Value>,
+    parent: &'a dyn Env,
 }
 
-fn apply_builtin(name: &str, args: Vec<Value>, env: &dyn Env) -> Result<Value, EvalError> {
-    match name {
-        "map" => builtin_map(args, env),
-        "filter" => builtin_filter(args, env),
-        "fold" => builtin_fold(args, env),
-        "reduce_meet" => builtin_reduce_meet(args, env),
-        "reduce_join" => builtin_reduce_join(args, env),
-        "reduce_semiring" => builtin_reduce_semiring(args, env),
-        _ => Err(EvalError::CallUnknown { func: name.into(), span: Span::default() }),
+impl<'a> Env for LambdaEnv<'a> {
+    fn get_ident(&self, name: &str) -> Option<Value> {
+        self.params
+            .get(name)
+            .cloned()
+            .or_else(|| self.captures.get(name).cloned())
+            .or_else(|| self.parent.get_ident(name))
+    }
+
+    fn get_field(&self, base: &Value, field: &str) -> Option<Value> {
+        self.parent.get_field(base, field)
+    }
+
+    fn enum_info(&self, type_id: &str) -> Option<EnumInfo> {
+        self.parent.enum_info(type_id)
+    }
+
+    fn default_order(&self, type_id: &str) -> Option<OrderInfo> {
+        self.parent.default_order(type_id)
+    }
+
+    fn named_order(&self, order_id: &str) -> Option<OrderInfo> {
+        self.parent.named_order(order_id)
+    }
+
+    fn semiring(&self, name: &str) -> Option<SemiringOps> {
+        self.parent.semiring(name)
+    }
+
+    fn lattice_ops(&self, type_id: &str) -> Option<LatticeOps> {
+        self.parent.lattice_ops(type_id)
+    }
+
+    fn capture_snapshot(&self) -> Vec<(String, Value)> {
+        self.parent.capture_snapshot()
+    }
+
+    fn current_semiring(&self) -> Option<SemiringOps> {
+        self.parent.current_semiring()
     }
 }
