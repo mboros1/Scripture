@@ -154,13 +154,11 @@ fn expect_lambda(value: &Value, label: &str) -> Result<LambdaValue, EvalError> {
 }
 
 fn expect_lattice(set: &SetValue, env: &dyn Env) -> Result<LatticeOps, EvalError> {
-    let ty_id = match &set.elem_type {
-        TypeTag::Enum(name) => name.clone(),
-        TypeTag::Int => "core.Int".into(),
-        other => format!("{:?}", other),
-    };
-    env.lattice_ops(&ty_id)
-        .ok_or(EvalError::LatticeRequired { ty: set.elem_type.clone(), span: Span::default() })
+    env.lattice_for(&set.elem_type)
+        .ok_or(EvalError::LatticeRequired {
+            ty: set.elem_type.clone(),
+            span: Span::default(),
+        })
 }
 
 fn fold_lattice(

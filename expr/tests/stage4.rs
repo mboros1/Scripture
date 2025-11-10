@@ -37,10 +37,10 @@ impl Env for TestEnv {
         None
     }
 
-    fn lattice_ops(&self, type_id: &str) -> Option<LatticeOps> {
-        if type_id == "core.Int" {
+    fn lattice_for(&self, ty: &TypeTag) -> Option<LatticeOps> {
+        if *ty == TypeTag::Int {
             Some(LatticeOps {
-                type_id: type_id.into(),
+                type_id: "core.Int".into(),
                 has_top: false,
                 has_bottom: false,
                 top: None,

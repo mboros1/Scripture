@@ -1,3 +1,4 @@
+use crate::error::TypeTag;
 use crate::value::{EnumInfo, LatticeOps, OrderInfo, SemiringOps, Value};
 
 pub trait Env {
@@ -12,12 +13,12 @@ pub trait Env {
         None
     }
 
-    fn lattice_ops(&self, _type_id: &str) -> Option<LatticeOps> {
+    fn lattice_for(&self, _ty: &TypeTag) -> Option<LatticeOps> {
         None
     }
 
-    fn capture_snapshot(&self) -> Vec<(String, Value)> {
-        Vec::new()
+    fn finite_set(&self, _name: &str) -> Option<Vec<Value>> {
+        None
     }
 
     fn current_semiring(&self) -> Option<SemiringOps> {

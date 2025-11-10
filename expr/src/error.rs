@@ -70,6 +70,8 @@ pub enum EvalError {
 
     SemiringMissing { span: Span },
     LatticeRequired { ty: TypeTag, span: Span },
+    CollectionUnknown { name: String, span: Span },
+    QuantifierTypeMismatch { quantifier: &'static str, found: TypeTag, span: Span },
 
     Other { message: String, span: Span },
 }

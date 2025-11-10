@@ -27,10 +27,6 @@ impl Env for TestEnv {
     fn named_order(&self, _order_id: &str) -> Option<expr::OrderInfo> {
         None
     }
-
-    fn capture_snapshot(&self) -> Vec<(String, Value)> {
-        self.idents.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    }
 }
 
 fn parse_expr(src: &str) -> expr::Expr {

@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, BOp, UOp, IdentPath, SetOp, IntervalExpr, BoundExpr};
 use crate::builtins;
@@ -57,7 +57,7 @@ fn eval_expr(expr: &Expr, env: &dyn Env) -> Result<Value, EvalError> {
         Expr::Binary { left, op, right } => {
             let lhs = eval_expr(left, env)?;
             let rhs = eval_expr(right, env)?;
-            eval_binary(op, lhs, rhs)
+            eval_binary(op, lhs, rhs, env)
         }
         Expr::SetLiteral(elements) => eval_set_literal(elements, env),
         Expr::In { elem, set } => {
@@ -374,7 +374,7 @@ fn compare_values_with_type(
     a: &Value,
     b: &Value,
     ty: &TypeTag,
-    _env: &dyn Env,
+    env: &dyn Env,
 ) -> Result<Ordering, EvalError> {
     match ty {
         TypeTag::Int => match (a, b) {
@@ -386,11 +386,64 @@ fn compare_values_with_type(
                 span: Span::default(),
             }),
         },
+        TypeTag::Enum(type_id) => match (a, b) {
+            (
+                Value::Enum { type_id: left_ty, .. },
+                Value::Enum { type_id: right_ty, .. },
+            ) if left_ty == right_ty => {
+                if let Some(order) = env.default_order(type_id) {
+                    Ok((order.cmp)(a, b))
+                } else {
+                    Err(EvalError::OrderMissing { ty: ty.clone(), span: Span::default() })
+                }
+            }
+            (left, right) => Err(EvalError::IntervalTypeMismatch {
+                lo_ty: left.type_tag(),
+                hi_ty: right.type_tag(),
+                x_ty: ty.clone(),
+                span: Span::default(),
+            }),
+        },
         _ => Err(EvalError::OrderMissing { ty: ty.clone(), span: Span::default() }),
     }
 }
 
-fn eval_binary(op: &BOp, lhs: Value, rhs: Value) -> Result<Value, EvalError> {
+fn compare_ordered(
+    lhs: Value,
+    rhs: Value,
+    env: &dyn Env,
+    predicate: impl Fn(Ordering) -> bool,
+) -> Result<Value, EvalError> {
+    let ord = compare_values(&lhs, &rhs, env)?;
+    Ok(Value::Bool(predicate(ord)))
+}
+
+fn compare_values(lhs: &Value, rhs: &Value, env: &dyn Env) -> Result<Ordering, EvalError> {
+    match (lhs, rhs) {
+        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (
+            Value::Enum { type_id: ty_l, .. },
+            Value::Enum { type_id: ty_r, .. },
+        ) if ty_l == ty_r => {
+            if let Some(order) = env.default_order(ty_l) {
+                Ok((order.cmp)(lhs, rhs))
+            } else {
+                Err(EvalError::OrderMissing {
+                    ty: TypeTag::Enum(ty_l.clone()),
+                    span: Span::default(),
+                })
+            }
+        }
+        (a, b) => Err(EvalError::TypeMismatch {
+            op: "cmp",
+            left: a.type_tag(),
+            right: b.type_tag(),
+            span: Span::default(),
+        }),
+    }
+}
+
+fn eval_binary(op: &BOp, lhs: Value, rhs: Value, env: &dyn Env) -> Result<Value, EvalError> {
     match op {
         BOp::Add => match (lhs, rhs) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
@@ -447,10 +500,10 @@ fn eval_binary(op: &BOp, lhs: Value, rhs: Value) -> Result<Value, EvalError> {
             let eq = value_eq(&lhs, &rhs)?;
             Ok(Value::Bool(!eq))
         }
-        BOp::Lt => compare_ints(lhs, rhs, |o| o == Ordering::Less),
-        BOp::Le => compare_ints(lhs, rhs, |o| o != Ordering::Greater),
-        BOp::Gt => compare_ints(lhs, rhs, |o| o == Ordering::Greater),
-        BOp::Ge => compare_ints(lhs, rhs, |o| o != Ordering::Less),
+        BOp::Lt => compare_ordered(lhs, rhs, env, |o| o == Ordering::Less),
+        BOp::Le => compare_ordered(lhs, rhs, env, |o| o != Ordering::Greater),
+        BOp::Gt => compare_ordered(lhs, rhs, env, |o| o == Ordering::Greater),
+        BOp::Ge => compare_ordered(lhs, rhs, env, |o| o != Ordering::Less),
         BOp::And => match (lhs, rhs) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
             (a, b) => Err(EvalError::TypeMismatch {
@@ -471,19 +524,6 @@ fn eval_binary(op: &BOp, lhs: Value, rhs: Value) -> Result<Value, EvalError> {
         },
     }
 }
-
-fn compare_ints(lhs: Value, rhs: Value, predicate: impl Fn(Ordering) -> bool) -> Result<Value, EvalError> {
-    match (lhs, rhs) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(predicate(a.cmp(&b)))),
-        (a, b) => Err(EvalError::TypeMismatch {
-            op: "cmp",
-            left: a.type_tag(),
-            right: b.type_tag(),
-            span: Span::default(),
-        }),
-    }
-}
-
 
 struct SemiringScopeEnv<'a> {
     parent: &'a dyn Env,
@@ -515,12 +555,12 @@ impl<'a> Env for SemiringScopeEnv<'a> {
         self.parent.semiring(name)
     }
 
-    fn lattice_ops(&self, type_id: &str) -> Option<LatticeOps> {
-        self.parent.lattice_ops(type_id)
+    fn lattice_for(&self, ty: &TypeTag) -> Option<LatticeOps> {
+        self.parent.lattice_for(ty)
     }
 
-    fn capture_snapshot(&self) -> Vec<(String, Value)> {
-        self.parent.capture_snapshot()
+    fn finite_set(&self, name: &str) -> Option<Vec<Value>> {
+        self.parent.finite_set(name)
     }
 
     fn current_semiring(&self) -> Option<SemiringOps> {
@@ -529,10 +569,17 @@ impl<'a> Env for SemiringScopeEnv<'a> {
 }
 
 fn build_lambda(params: &[String], body: &Expr, env: &dyn Env) -> Result<Value, EvalError> {
-    let captures = env
-        .capture_snapshot()
-        .into_iter()
-        .collect::<HashMap<_, _>>();
+    let bound: HashSet<String> = params.iter().cloned().collect();
+    let mut free = HashSet::new();
+    collect_free_vars(body, &bound, &mut free);
+    let mut captures = HashMap::new();
+    for name in free {
+        if let Some(value) = env.get_ident(&name) {
+            captures.insert(name, value);
+        } else {
+            return Err(EvalError::LambdaCaptureUnknown { name, span: Span::default() });
+        }
+    }
     Ok(Value::Lambda(LambdaValue {
         params: params.to_vec(),
         body: Box::new(body.clone()),
@@ -595,15 +642,79 @@ impl<'a> Env for LambdaEnv<'a> {
         self.parent.semiring(name)
     }
 
-    fn lattice_ops(&self, type_id: &str) -> Option<LatticeOps> {
-        self.parent.lattice_ops(type_id)
+    fn lattice_for(&self, ty: &TypeTag) -> Option<LatticeOps> {
+        self.parent.lattice_for(ty)
     }
 
-    fn capture_snapshot(&self) -> Vec<(String, Value)> {
-        self.parent.capture_snapshot()
+    fn finite_set(&self, name: &str) -> Option<Vec<Value>> {
+        self.parent.finite_set(name)
     }
 
     fn current_semiring(&self) -> Option<SemiringOps> {
         self.parent.current_semiring()
+    }
+}
+
+fn collect_free_vars(expr: &Expr, bound: &HashSet<String>, acc: &mut HashSet<String>) {
+    match expr {
+        Expr::Int(_) | Expr::Bool(_) | Expr::Str(_) | Expr::EnumVariant { .. } | Expr::Infinity(_) => {}
+        Expr::Ident(path) => note_ident(path, bound, acc),
+        Expr::Unary { expr, .. } => collect_free_vars(expr, bound, acc),
+        Expr::Binary { left, right, .. } => {
+            collect_free_vars(left, bound, acc);
+            collect_free_vars(right, bound, acc);
+        }
+        Expr::SetLiteral(items) => {
+            for item in items {
+                collect_free_vars(item, bound, acc);
+            }
+        }
+        Expr::In { elem, set } => {
+            collect_free_vars(elem, bound, acc);
+            collect_free_vars(set, bound, acc);
+        }
+        Expr::SetOp { lhs, rhs, .. } => {
+            collect_free_vars(lhs, bound, acc);
+            collect_free_vars(rhs, bound, acc);
+        }
+        Expr::Cardinality(expr) => collect_free_vars(expr, bound, acc),
+        Expr::Interval(interval) => {
+            collect_free_vars_bound(&interval.lo, bound, acc);
+            collect_free_vars_bound(&interval.hi, bound, acc);
+        }
+        Expr::Lambda { params, body } => {
+            let mut inner_bound = bound.clone();
+            for param in params {
+                inner_bound.insert(param.clone());
+            }
+            collect_free_vars(body, &inner_bound, acc);
+        }
+        Expr::Call(call) => collect_free_vars_call(call, bound, acc),
+        Expr::Pipe { lhs, call } => {
+            collect_free_vars(lhs, bound, acc);
+            collect_free_vars_call(call, bound, acc);
+        }
+        Expr::WithSemiring { body, .. } => collect_free_vars(body, bound, acc),
+    }
+}
+
+fn collect_free_vars_call(call: &crate::ast::Call, bound: &HashSet<String>, acc: &mut HashSet<String>) {
+    for arg in &call.args {
+        collect_free_vars(arg, bound, acc);
+    }
+}
+
+fn collect_free_vars_bound(bound_expr: &BoundExpr, bound: &HashSet<String>, acc: &mut HashSet<String>) {
+    match bound_expr {
+        BoundExpr::Open(expr) | BoundExpr::Closed(expr) => collect_free_vars(expr, bound, acc),
+        BoundExpr::NegInf | BoundExpr::PosInf => {}
+    }
+}
+
+fn note_ident(path: &IdentPath, bound: &HashSet<String>, acc: &mut HashSet<String>) {
+    if let Some(head) = path.0.first() {
+        if !bound.contains(head) {
+            acc.insert(head.clone());
+        }
     }
 }
