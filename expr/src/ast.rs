@@ -16,6 +16,7 @@ pub enum Expr {
     Lambda { params: Vec<String>, body: Box<Expr> },
     Call(Call),
     Pipe { lhs: Box<Expr>, call: Call },
+    WithSemiring { name: String, body: Box<Expr> },
 
     Unary { op: UOp, expr: Box<Expr> },
     Binary { left: Box<Expr>, op: BOp, right: Box<Expr> },

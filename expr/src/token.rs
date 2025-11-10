@@ -16,6 +16,7 @@ pub enum TokenKind {
     RBracket,
     Dot,
     Comma,
+    Colon,
     ColonColon,
 
     // operators
@@ -44,6 +45,7 @@ pub enum TokenKind {
     Arrow,
     PlusInf,
     MinusInf,
+    WithSemiring,
 
     // literals
     Int(i64),
@@ -115,6 +117,17 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             '[' => { chars.next(); index += 1; TokenKind::LBracket },
             ']' => { chars.next(); index += 1; TokenKind::RBracket },
             ',' => { chars.next(); index += 1; TokenKind::Comma },
+            ':' => {
+                chars.next();
+                index += 1;
+                if let Some(':') = chars.peek() {
+                    chars.next();
+                    index += 1;
+                    TokenKind::ColonColon
+                } else {
+                    TokenKind::Colon
+                }
+            }
             '.' => { chars.next(); index += 1; TokenKind::Dot },
             '!' => {
                 chars.next();
@@ -199,20 +212,6 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                     }
                 }
             }
-            ':' => {
-                chars.next();
-                index += 1;
-                if let Some(':') = chars.peek() {
-                    chars.next();
-                    index += 1;
-                    TokenKind::ColonColon
-                } else {
-                    return Err(LexError::UnknownChar {
-                        ch: ':',
-                        span: Span { start, end: index },
-                    });
-                }
-            }
             ' ' | '\t' | '\n' | '\r' => { // skip whitespace
                 chars.next();
                 index += 1;
@@ -268,6 +267,7 @@ fn read_ident(chars: &mut Peekable<Chars>, index: &mut usize) -> TokenKind {
         "intersect" => TokenKind::Intersect,
         "diff" => TokenKind::Diff,
         "card" => TokenKind::Card,
+        "with_semiring" => TokenKind::WithSemiring,
         _ => TokenKind::Ident(name),
     }
 }

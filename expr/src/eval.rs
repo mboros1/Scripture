@@ -124,6 +124,10 @@ pub trait Env {
     fn capture_snapshot(&self) -> Vec<(String, Value)> {
         Vec::new()
     }
+
+    fn current_semiring(&self) -> Option<SemiringOps> {
+        None
+    }
 }
 
 pub fn eval(expr: &Expr, env: &dyn Env) -> Result<Value, EvalError> {
@@ -193,6 +197,13 @@ fn eval_expr(expr: &Expr, env: &dyn Env) -> Result<Value, EvalError> {
         Expr::Pipe { lhs, call } => {
             let lefthand = eval_expr(lhs, env)?;
             eval_pipe(&call, lefthand, env)
+        }
+        Expr::WithSemiring { name, body } => {
+            let ops = env
+                .semiring(name)
+                .ok_or(EvalError::SemiringMissing { span: Span::default() })?;
+            let scope = SemiringScopeEnv { parent: env, current: ops };
+            eval_expr(body, &scope)
         }
     }
 }
@@ -835,7 +846,7 @@ fn builtin_reduce_semiring(args: Vec<Value>, env: &dyn Env) -> Result<Value, Eva
         }
     };
 
-    let semiring = env.semiring("default").ok_or(EvalError::SemiringMissing { span: Span::default() })?;
+    let semiring = env.current_semiring().ok_or(EvalError::SemiringMissing { span: Span::default() })?;
     let mut acc = semiring.zero.clone();
     for elem in &set.elements {
         let mapped = call_lambda(&lambda, &[elem.clone()], env)?;
@@ -907,6 +918,53 @@ impl<'a> Env for LambdaEnv<'a> {
 
     fn capture_snapshot(&self) -> Vec<(String, Value)> {
         self.parent.capture_snapshot()
+    }
+
+    fn current_semiring(&self) -> Option<SemiringOps> {
+        self.parent.current_semiring()
+    }
+}
+
+struct SemiringScopeEnv<'a> {
+    parent: &'a dyn Env,
+    current: SemiringOps,
+}
+
+impl<'a> Env for SemiringScopeEnv<'a> {
+    fn get_ident(&self, name: &str) -> Option<Value> {
+        self.parent.get_ident(name)
+    }
+
+    fn get_field(&self, base: &Value, field: &str) -> Option<Value> {
+        self.parent.get_field(base, field)
+    }
+
+    fn enum_info(&self, type_id: &str) -> Option<EnumInfo> {
+        self.parent.enum_info(type_id)
+    }
+
+    fn default_order(&self, type_id: &str) -> Option<OrderInfo> {
+        self.parent.default_order(type_id)
+    }
+
+    fn named_order(&self, order_id: &str) -> Option<OrderInfo> {
+        self.parent.named_order(order_id)
+    }
+
+    fn semiring(&self, name: &str) -> Option<SemiringOps> {
+        self.parent.semiring(name)
+    }
+
+    fn lattice_ops(&self, type_id: &str) -> Option<LatticeOps> {
+        self.parent.lattice_ops(type_id)
+    }
+
+    fn capture_snapshot(&self) -> Vec<(String, Value)> {
+        self.parent.capture_snapshot()
+    }
+
+    fn current_semiring(&self) -> Option<SemiringOps> {
+        Some(self.current.clone())
     }
 }
 

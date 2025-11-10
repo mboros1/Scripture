@@ -89,6 +89,8 @@ impl<'a> Parser<'a> {
 
             TokenKind::LBrace => self.parse_set_literal()?,
 
+            TokenKind::WithSemiring => self.parse_with_semiring_expr()?,
+
             TokenKind::Pipe => {
                 return Err(ParseError::UnexpectedToken { span: token.span });
             }
@@ -294,6 +296,53 @@ impl<'a> Parser<'a> {
                 Err(err)
             }
         }
+    }
+
+    fn parse_with_semiring_expr(&mut self) -> Result<Expr, ParseError> {
+        let name = self.parse_dotted_ident_string()?;
+        match self.next_token() {
+            Some(Token { kind: TokenKind::Colon, .. }) => {}
+            Some(tok) => {
+                return Err(ParseError::ExpectedToken {
+                    expected: ":",
+                    span: tok.span,
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof { span: self.eof_span() }),
+        }
+        let body = self.parse_expr()?;
+        Ok(Expr::WithSemiring { name, body: Box::new(body) })
+    }
+
+    fn parse_dotted_ident_string(&mut self) -> Result<String, ParseError> {
+        let first = self
+            .next_token()
+            .ok_or(ParseError::UnexpectedEof { span: self.eof_span() })?;
+        let mut parts = match &first.kind {
+            TokenKind::Ident(name) => vec![name.clone()],
+            _ => {
+                return Err(ParseError::ExpectedToken {
+                    expected: "identifier",
+                    span: first.span,
+                })
+            }
+        };
+        while matches!(self.peek_token().map(|t| &t.kind), Some(TokenKind::Dot)) {
+            self.next_token();
+            let next = self
+                .next_token()
+                .ok_or(ParseError::UnexpectedEof { span: self.eof_span() })?;
+            match &next.kind {
+                TokenKind::Ident(name) => parts.push(name.clone()),
+                _ => {
+                    return Err(ParseError::ExpectedToken {
+                        expected: "identifier",
+                        span: next.span,
+                    })
+                }
+            }
+        }
+        Ok(parts.join("."))
     }
 
     fn parse_interval_literal(&mut self, lower_kind: BoundKind) -> Result<Expr, ParseError> {
